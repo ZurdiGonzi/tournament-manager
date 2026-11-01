@@ -1,13 +1,14 @@
 -- =============================================================================
 -- Contract: Flyway Migration V1__init_store_tournament_schema.sql
--- Feature: 001-store-tournament-data-model
+-- Feature: 001-store-tournament-data-model (Synchronized with 003-align-database-schema)
 -- Target: PostgreSQL 15+ (Supabase / Neon)
 -- =============================================================================
 
--- 1. USERS (Usuario: nombre, contraseña, rol Dueño/Jugador)
+-- 1. USERS (Usuario con username y email únicos, contraseña cifrada y rol)
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     username VARCHAR(60) NOT NULL UNIQUE,
+    email VARCHAR(255) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
     role VARCHAR(20) NOT NULL CHECK (role IN ('PLAYER', 'ADMIN')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -42,12 +43,12 @@ CREATE TABLE decks (
     UNIQUE (user_id, moxfield_deck_id)
 );
 
--- 5. LEAGUES (Liga: pertenece a una Tienda, agrupa una lista de Torneos y una lista de Jugadores con sus puntos)
+-- 5. LEAGUES (Ligas continuadas de tienda con formatos oficiales ampliados)
 CREATE TABLE leagues (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
     name VARCHAR(150) NOT NULL,
-    format VARCHAR(30) NOT NULL CHECK (format IN ('STANDARD', 'COMMANDER')),
+    format VARCHAR(30) NOT NULL CHECK (format IN ('STANDARD', 'COMMANDER', 'MODERN', 'PAUPER')),
     prize_description TEXT,
     start_date TIMESTAMPTZ NOT NULL,
     end_date TIMESTAMPTZ,
@@ -69,7 +70,7 @@ CREATE TABLE league_standings (
     PRIMARY KEY (league_id, user_id)
 );
 
--- 7. TOURNAMENT_TEMPLATES (Plantillas para creación periódica con @Scheduled)
+-- 7. TOURNAMENT_TEMPLATES (Plantillas para creación periódica con @Scheduled y presupuesto opcional)
 CREATE TABLE tournament_templates (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
@@ -78,16 +79,16 @@ CREATE TABLE tournament_templates (
     cron_expression VARCHAR(60) NOT NULL,
     entry_fee NUMERIC(10, 2) NOT NULL DEFAULT 0.00 CHECK (entry_fee >= 0),
     prize_description TEXT NOT NULL,
-    format VARCHAR(30) NOT NULL CHECK (format IN ('STANDARD', 'COMMANDER')),
-    max_deck_budget NUMERIC(10, 2) NOT NULL CHECK (max_deck_budget > 0),
-    max_players INT NOT NULL DEFAULT 32 CHECK (max_players >= 2),
+    format VARCHAR(30) NOT NULL CHECK (format IN ('STANDARD', 'COMMANDER', 'MODERN', 'PAUPER')),
+    max_deck_budget NUMERIC(10, 2) CHECK (max_deck_budget IS NULL OR max_deck_budget > 0),
+    max_players INT NOT NULL DEFAULT 32 CHECK (max_players >= 4),
     max_rounds INT NOT NULL DEFAULT 3 CHECK (max_rounds > 0),
     active BOOLEAN NOT NULL DEFAULT true,
     last_generated_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- 8. TOURNAMENTS (Torneo: día/hora, precio, restricciones formato/presupuesto, premio y vínculo a Liga)
+-- 8. TOURNAMENTS (Torneo con formatos ampliados, presupuesto flexible e idempotencia)
 CREATE TABLE tournaments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
@@ -97,9 +98,9 @@ CREATE TABLE tournaments (
     scheduled_at TIMESTAMPTZ NOT NULL,
     entry_fee NUMERIC(10, 2) NOT NULL DEFAULT 0.00 CHECK (entry_fee >= 0),
     prize_description TEXT NOT NULL,
-    format VARCHAR(30) NOT NULL CHECK (format IN ('STANDARD', 'COMMANDER')),
-    max_deck_budget NUMERIC(10, 2) NOT NULL CHECK (max_deck_budget > 0),
-    max_players INT NOT NULL DEFAULT 32 CHECK (max_players >= 2),
+    format VARCHAR(30) NOT NULL CHECK (format IN ('STANDARD', 'COMMANDER', 'MODERN', 'PAUPER')),
+    max_deck_budget NUMERIC(10, 2) CHECK (max_deck_budget IS NULL OR max_deck_budget > 0),
+    max_players INT NOT NULL DEFAULT 32 CHECK (max_players >= 4),
     status VARCHAR(30) NOT NULL DEFAULT 'REGISTRATION_OPEN'
         CHECK (status IN ('DRAFT', 'REGISTRATION_OPEN', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED')),
     current_round INT NOT NULL DEFAULT 0,
@@ -126,14 +127,14 @@ CREATE TABLE scryfall_cards (
     last_synced_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- 10. TOURNAMENT_REGISTRATIONS (Lista de usuarios apuntados al Torneo + Puntos + Snapshot JSONB)
+-- 10. TOURNAMENT_REGISTRATIONS (Inscripciones con estados normalizados y snapshot JSONB)
 CREATE TABLE tournament_registrations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tournament_id UUID NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     deck_id UUID NOT NULL REFERENCES decks(id) ON DELETE RESTRICT,
-    status VARCHAR(25) NOT NULL DEFAULT 'REGISTERED'
-        CHECK (status IN ('REGISTERED', 'CHECKED_IN', 'DROPPED', 'DISQUALIFIED')),
+    status VARCHAR(25) NOT NULL DEFAULT 'CONFIRMED'
+        CHECK (status IN ('CONFIRMED', 'CANCELLED', 'DROPPED')),
     calculated_deck_price NUMERIC(10, 2) NOT NULL CHECK (calculated_deck_price >= 0),
     match_points INT NOT NULL DEFAULT 0 CHECK (match_points >= 0),
     omw_percentage NUMERIC(5, 4) NOT NULL DEFAULT 0.0000,
@@ -153,12 +154,12 @@ CREATE TABLE registration_deck_cards (
     unit_price_snapshot NUMERIC(10, 2) NOT NULL CHECK (unit_price_snapshot >= 0)
 );
 
--- 12. ROUNDS & MATCHES (Soporte relacional para rondas y emparejamientos del torneo)
+-- 12. ROUNDS & MATCHES (Estructura competitiva con estados normalizados 1:1 con Java 21)
 CREATE TABLE rounds (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tournament_id UUID NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
     round_number INT NOT NULL CHECK (round_number > 0),
-    status VARCHAR(20) NOT NULL CHECK (status IN ('IN_PROGRESS', 'COMPLETED')),
+    status VARCHAR(20) NOT NULL CHECK (status IN ('ACTIVE', 'FINISHED')),
     started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     ended_at TIMESTAMPTZ,
     UNIQUE (tournament_id, round_number)
@@ -169,12 +170,12 @@ CREATE TABLE matches (
     round_id UUID NOT NULL REFERENCES rounds(id) ON DELETE CASCADE,
     table_number INT NOT NULL,
     player1_id UUID NOT NULL REFERENCES users(id),
-    player2_id UUID REFERENCES users(id),
+    player2_id UUID REFERENCES users(id), -- NULL indica BYE/descanso
     player1_wins INT NOT NULL DEFAULT 0,
     player2_wins INT NOT NULL DEFAULT 0,
     draws INT NOT NULL DEFAULT 0,
     status VARCHAR(30) NOT NULL DEFAULT 'PENDING'
-        CHECK (status IN ('PENDING', 'IN_PROGRESS', 'AWAITING_CONFIRMATION', 'DISPUTED', 'CONFIRMED')),
+        CHECK (status IN ('PENDING', 'SUBMITTED', 'CONFIRMED', 'DISPUTED')),
     winner_id UUID REFERENCES users(id)
 );
 
