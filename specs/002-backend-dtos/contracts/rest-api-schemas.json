@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tournament Manager REST DTO Schemas",
+  "description": "Schemas y ejemplos de payloads para solicitudes y respuestas HTTP en la API REST",
+  "definitions": {
+    "RegisterRequest": {
+      "type": "object",
+      "required": ["username", "email", "password"],
+      "properties": {
+        "username": { "type": "string", "minLength": 3, "maxLength": 30, "pattern": "^[a-zA-Z0-9._-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 255 },
+        "password": { "type": "string", "minLength": 8, "maxLength": 100 },
+        "role": { "type": "string", "enum": ["PLAYER", "ADMIN"], "default": "PLAYER" }
+      },
+      "example": {
+        "username": "gonzalo_mtg",
+        "email": "gonzalo@example.com",
+        "password": "SuperSecretPassword123!",
+        "role": "PLAYER"
+      }
+    },
+    "AuthResponse": {
+      "type": "object",
+      "required": ["accessToken", "tokenType", "expiresInSeconds", "user"],
+      "properties": {
+        "accessToken": { "type": "string" },
+        "tokenType": { "type": "string", "example": "Bearer" },
+        "expiresInSeconds": { "type": "integer", "example": 86400 },
+        "user": { "$ref": "#/definitions/UserSummaryResponse" }
+      }
+    },
+    "UserSummaryResponse": {
+      "type": "object",
+      "required": ["id", "username", "email", "roles", "createdAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "username": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "roles": { "type": "array", "items": { "type": "string", "enum": ["PLAYER", "ADMIN"] } },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "example": {
+        "id": "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
+        "username": "gonzalo_mtg",
+        "email": "gonzalo@example.com",
+        "roles": ["PLAYER"],
+        "createdAt": "2026-11-01T12:00:00Z"
+      }
+    },
+    "CreateTournamentRequest": {
+      "type": "object",
+      "required": ["storeId", "name", "scheduledAt", "entryFeeEur", "prizeDescription", "maxCapacity", "restrictions"],
+      "properties": {
+        "storeId": { "type": "string", "format": "uuid" },
+        "name": { "type": "string", "minLength": 3, "maxLength": 120 },
+        "scheduledAt": { "type": "string", "format": "date-time" },
+        "entryFeeEur": { "type": "number", "minimum": 0.00 },
+        "prizeDescription": { "type": "string", "maxLength": 500 },
+        "maxCapacity": { "type": "integer", "minimum": 4, "maximum": 256 },
+        "restrictions": {
+          "type": "object",
+          "required": ["format"],
+          "properties": {
+            "format": { "type": "string", "enum": ["STANDARD", "COMMANDER", "MODERN", "PAUPER"] },
+            "maxBudgetEur": { "type": "number", "minimum": 0.00 }
+          }
+        }
+      },
+      "example": {
+        "storeId": "b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e",
+        "name": "Torneo Commander Budget 100€",
+        "scheduledAt": "2026-11-15T18:00:00Z",
+        "entryFeeEur": 10.00,
+        "prizeDescription": "Sobre de coleccionista al 1º y 2º clasificado",
+        "maxCapacity": 32,
+        "restrictions": {
+          "format": "COMMANDER",
+          "maxBudgetEur": 100.00
+        }
+      }
+    },
+    "DeckSnapshotDto": {
+      "type": "object",
+      "required": ["deckId", "deckName", "moxfieldUrl", "format", "totalPriceEur", "capturedAt", "cards"],
+      "properties": {
+        "deckId": { "type": "string", "format": "uuid" },
+        "deckName": { "type": "string" },
+        "moxfieldUrl": { "type": "string", "format": "uri" },
+        "format": { "type": "string", "enum": ["STANDARD", "COMMANDER", "MODERN", "PAUPER"] },
+        "totalPriceEur": { "type": "number" },
+        "capturedAt": { "type": "string", "format": "date-time" },
+        "cards": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["scryfallId", "name", "quantity", "unitPriceEur"],
+            "properties": {
+              "scryfallId": { "type": "string", "format": "uuid" },
+              "oracleId": { "type": "string", "format": "uuid" },
+              "name": { "type": "string" },
+              "quantity": { "type": "integer", "minimum": 1 },
+              "manaCost": { "type": "string" },
+              "manaValue": { "type": "number" },
+              "typeLine": { "type": "string" },
+              "colors": { "type": "array", "items": { "type": "string" } },
+              "colorIdentity": { "type": "array", "items": { "type": "string" } },
+              "unitPriceEur": { "type": "number" },
+              "isCommander": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "TournamentRegistrationResponse": {
+      "type": "object",
+      "required": ["id", "tournamentId", "userId", "username", "status", "registeredAt", "deckSnapshot"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "tournamentId": { "type": "string", "format": "uuid" },
+        "userId": { "type": "string", "format": "uuid" },
+        "username": { "type": "string" },
+        "status": { "type": "string", "enum": ["CONFIRMED", "CANCELLED", "DROPPED"] },
+        "registeredAt": { "type": "string", "format": "date-time" },
+        "deckSnapshot": { "$ref": "#/definitions/DeckSnapshotDto" }
+      }
+    },
+    "ReportMatchResultRequest": {
+      "type": "object",
+      "required": ["matchId", "player1Wins", "player2Wins", "draws"],
+      "properties": {
+        "matchId": { "type": "string", "format": "uuid" },
+        "player1Wins": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "player2Wins": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "draws": { "type": "integer", "minimum": 0, "maximum": 3 }
+      },
+      "example": {
+        "matchId": "c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f",
+        "player1Wins": 2,
+        "player2Wins": 1,
+        "draws": 0
+      }
+    },
+    "ApiErrorResponse": {
+      "type": "object",
+      "required": ["type", "title", "status", "detail", "instance", "timestamp"],
+      "properties": {
+        "type": { "type": "string", "format": "uri" },
+        "title": { "type": "string" },
+        "status": { "type": "integer" },
+        "detail": { "type": "string" },
+        "instance": { "type": "string", "format": "uri" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "invalidParams": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["field", "message"],
+            "properties": {
+              "field": { "type": "string" },
+              "rejectedValue": {},
+              "message": { "type": "string" }
+            }
+          }
+        }
+      },
+      "example": {
+        "type": "urn:problem:validation-error",
+        "title": "Error de validación en la solicitud",
+        "status": 400,
+        "detail": "Uno o varios campos no superaron las reglas de validación",
+        "instance": "/api/v1/admin/tournaments",
+        "timestamp": "2026-11-01T16:00:00Z",
+        "invalidParams": [
+          {
+            "field": "restrictions.maxBudgetEur",
+            "rejectedValue": -5.00,
+            "message": "El límite de presupuesto no puede ser negativo"
+          }
+        ]
+      }
+    }
+  }
+}
+
