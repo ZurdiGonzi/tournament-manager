@@ -42,6 +42,18 @@ CREATE TABLE decks (
     UNIQUE (user_id, moxfield_deck_id)
 );
 
+-- 4.5. SCORING_FORMULAS (Fórmulas matemáticas guardadas en BD que puede cambiar el dueño de la tienda)
+CREATE TABLE scoring_formulas (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+    name VARCHAR(120) NOT NULL,
+    formula_type VARCHAR(35) NOT NULL
+        CHECK (formula_type IN ('MATCH_POINTS', 'LEAGUE_MATCHDAY_POINTS', 'PAIRING_WEIGHT')),
+    expression TEXT NOT NULL,
+    description TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- 5. TOURNAMENT_TEMPLATES (Plantillas para creación periódica con @Scheduled)
 CREATE TABLE tournament_templates (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

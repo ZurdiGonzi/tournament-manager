@@ -1,0 +1,28 @@
+# Java / Maven / Gradle
+target/
+*.class
+*.jar
+*.war
+*.ear
+.mvn/timing.properties
+.gradle/
+build/
+
+# Node / Frontend
+node_modules/
+dist/
+
+# IDEs & OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+*.log
+
+# Environment
+.env
+.env.*
+!.env.example
