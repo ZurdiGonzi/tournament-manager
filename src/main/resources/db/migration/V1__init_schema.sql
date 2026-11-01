@@ -1,6 +1,6 @@
 -- =============================================================================
 -- Flyway Migration: V1__init_schema.sql
--- Feature: 003-align-database-schema
+-- Feature: 004-custom-scoring-pairings
 -- Target: PostgreSQL 15+ (Supabase / Neon)
 -- =============================================================================
 
@@ -43,7 +43,7 @@ CREATE TABLE decks (
     UNIQUE (user_id, moxfield_deck_id)
 );
 
--- 5. LEAGUES (Ligas continuadas de tienda con formatos oficiales ampliados)
+-- 5. LEAGUES (Ligas continuadas con formatos oficiales, puntos por asistencia y ranking)
 CREATE TABLE leagues (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
@@ -54,6 +54,11 @@ CREATE TABLE leagues (
     end_date TIMESTAMPTZ,
     status VARCHAR(30) NOT NULL DEFAULT 'IN_PROGRESS'
         CHECK (status IN ('OPEN', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED')),
+    scoring_system VARCHAR(30) NOT NULL DEFAULT 'CUMULATIVE_MATCH_POINTS'
+        CHECK (scoring_system IN ('CUMULATIVE_MATCH_POINTS', 'RANK_BASED', 'PARTICIPATION_PLUS_RECORD', 'CUSTOM')),
+    participation_points INT NOT NULL DEFAULT 0 CHECK (participation_points >= 0),
+    best_n_tournaments INT CHECK (best_n_tournaments IS NULL OR best_n_tournaments > 0),
+    rank_points_distribution JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -70,7 +75,7 @@ CREATE TABLE league_standings (
     PRIMARY KEY (league_id, user_id)
 );
 
--- 7. TOURNAMENT_TEMPLATES (Plantillas recurrentes con presupuesto opcional y formatos)
+-- 7. TOURNAMENT_TEMPLATES (Plantillas con algoritmos de pairing y puntuación de partida)
 CREATE TABLE tournament_templates (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
@@ -83,12 +88,20 @@ CREATE TABLE tournament_templates (
     max_deck_budget NUMERIC(10, 2) CHECK (max_deck_budget IS NULL OR max_deck_budget > 0),
     max_players INT NOT NULL DEFAULT 32 CHECK (max_players >= 4),
     max_rounds INT NOT NULL DEFAULT 3 CHECK (max_rounds > 0),
+    pairing_system VARCHAR(30) NOT NULL DEFAULT 'SWISS'
+        CHECK (pairing_system IN ('SWISS', 'SINGLE_ELIMINATION', 'ROUND_ROBIN', 'CUSTOM')),
+    pairing_config JSONB,
+    points_per_win INT NOT NULL DEFAULT 3 CHECK (points_per_win >= 0),
+    points_per_draw INT NOT NULL DEFAULT 1 CHECK (points_per_draw >= 0),
+    points_per_loss INT NOT NULL DEFAULT 0 CHECK (points_per_loss >= 0),
+    points_per_bye INT NOT NULL DEFAULT 3 CHECK (points_per_bye >= 0),
+    scoring_rules JSONB,
     active BOOLEAN NOT NULL DEFAULT true,
     last_generated_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- 8. TOURNAMENTS (Torneo con fecha, precio, aforo, formato ampliado y presupuesto opcional)
+-- 8. TOURNAMENTS (Torneo con pairings configurables y reglas de puntuación personalizadas)
 CREATE TABLE tournaments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
@@ -105,6 +118,14 @@ CREATE TABLE tournaments (
         CHECK (status IN ('DRAFT', 'REGISTRATION_OPEN', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED')),
     current_round INT NOT NULL DEFAULT 0,
     max_rounds INT NOT NULL DEFAULT 3,
+    pairing_system VARCHAR(30) NOT NULL DEFAULT 'SWISS'
+        CHECK (pairing_system IN ('SWISS', 'SINGLE_ELIMINATION', 'ROUND_ROBIN', 'CUSTOM')),
+    pairing_config JSONB,
+    points_per_win INT NOT NULL DEFAULT 3 CHECK (points_per_win >= 0),
+    points_per_draw INT NOT NULL DEFAULT 1 CHECK (points_per_draw >= 0),
+    points_per_loss INT NOT NULL DEFAULT 0 CHECK (points_per_loss >= 0),
+    points_per_bye INT NOT NULL DEFAULT 3 CHECK (points_per_bye >= 0),
+    scoring_rules JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT uq_tournament_template_schedule UNIQUE (template_id, scheduled_at)
 );
@@ -180,10 +201,10 @@ CREATE TABLE matches (
 );
 
 -- =============================================================================
--- VISTAS SQL (ESTADÍSTICAS DE SCRYFALL Y CLASIFICACIÓN DE LIGAS POR TORNEOS)
+-- VISTAS SQL (ESTADÍSTICAS DE SCRYFALL Y CLASIFICACIÓN DE LIGAS CON BONOS)
 -- =============================================================================
 
--- Vista 1: Clasificación de Liga calculada desde los puntos de sus Torneos asociados
+-- Vista 1: Clasificación de Liga calculada sumando puntos de torneos y asistencia
 CREATE OR REPLACE VIEW v_league_leaderboard AS
 SELECT
     l.id AS league_id,
@@ -191,19 +212,27 @@ SELECT
     l.name AS league_name,
     u.id AS user_id,
     u.username,
-    COALESCE(ls.total_points, SUM(tr.match_points), 0) AS total_points,
+    COALESCE(ls.total_points, 
+        SUM(tr.match_points) + (COUNT(DISTINCT tr.tournament_id) * l.participation_points),
+        0
+    ) AS total_points,
     COUNT(DISTINCT tr.tournament_id) AS tournaments_played,
+    COALESCE(SUM(tr.match_points), 0) AS match_points_sum,
+    (COUNT(DISTINCT tr.tournament_id) * l.participation_points) AS participation_points_sum,
     RANK() OVER (
         PARTITION BY l.id
-        ORDER BY COALESCE(ls.total_points, SUM(tr.match_points), 0) DESC,
-                 COUNT(DISTINCT tr.tournament_id) DESC
+        ORDER BY COALESCE(ls.total_points, 
+            SUM(tr.match_points) + (COUNT(DISTINCT tr.tournament_id) * l.participation_points),
+            0
+        ) DESC,
+        COUNT(DISTINCT tr.tournament_id) DESC
     ) AS current_rank
 FROM leagues l
 JOIN league_standings ls ON ls.league_id = l.id
 JOIN users u ON u.id = ls.user_id
 LEFT JOIN tournaments t ON t.league_id = l.id
 LEFT JOIN tournament_registrations tr ON tr.tournament_id = t.id AND tr.user_id = u.id
-GROUP BY l.id, l.store_id, l.name, u.id, u.username, ls.total_points;
+GROUP BY l.id, l.store_id, l.name, l.participation_points, u.id, u.username, ls.total_points;
 
 -- Vista 2: Estadísticas de Cartas de Scryfall por Tienda y Formato
 CREATE OR REPLACE VIEW v_scryfall_card_stats AS
@@ -246,4 +275,3 @@ CREATE INDEX idx_scryfall_legalities_gin ON scryfall_cards USING GIN (legalities
 CREATE INDEX idx_scryfall_colors_gin ON scryfall_cards USING GIN (colors);
 CREATE INDEX idx_reg_deck_cards_card ON registration_deck_cards(scryfall_card_id);
 CREATE INDEX idx_reg_deck_cards_registration ON registration_deck_cards(registration_id);
-
