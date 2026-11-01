@@ -70,6 +70,38 @@ Todos los endpoints siguen la segregación de seguridad definida en la Constituc
     }
     ```
 
+### 1.3. Detalle y Clasificación de Liga (`GET /api/v1/public/leagues/{leagueId}`)
+- Respuesta `200 OK` (`LeagueDetailDto`):
+  ```json
+  {
+    "id": "uuid",
+    "storeId": "uuid",
+    "name": "Liga Invierno Commander 2026",
+    "format": "COMMANDER",
+    "status": "IN_PROGRESS",
+    "tournaments": [
+      {
+        "id": "uuid",
+        "name": "Jornada 1 - Commander Budget",
+        "scheduledAt": "2026-11-06T18:00:00Z",
+        "status": "COMPLETED"
+      }
+    ],
+    "standings": [
+      {
+        "rank": 1,
+        "userId": "uuid",
+        "username": "jugador_1",
+        "totalPoints": 15,
+        "tournamentsPlayed": 2,
+        "matchesWon": 5,
+        "matchesDrawn": 0,
+        "matchesLost": 1
+      }
+    ]
+  }
+  ```
+
 ---
 
 ## 2. Endpoints de Jugador (`/api/v1/player/**`) — `hasAnyRole('PLAYER', 'ADMIN')`

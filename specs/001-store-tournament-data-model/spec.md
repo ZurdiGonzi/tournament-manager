@@ -8,6 +8,12 @@
 
 **Input**: User description: "Quiero que crees el spec de la base de datos. Tiene que constar de: Usuario: nombre, contraseña y lista de mazos, habra un usuario que sera el dueño que podra hacer mas cosas. Torneo: Dia y hora, precio, lista de usuarios apuntads, restricciones (formato de torneo de magic standrat, commander y restriccion de precio) y premio. Mazo: sara simplemente un enlace a moxfield. Tambien tienes que tener la informacion que aporta scryfall sobre las cartas para hacer las estadisticas. Tienda: lista de torneos, propietario, usuarios"
 
+## Clarifications
+
+### Session 2026-11-01
+
+- Contexto aportado por el usuario: Los jugadores mantienen una lista de mazos guardados en su perfil; en cada jornada de liga/torneo el jugador debe registrarse con su mazo quedando guardado históricamente para futuras estadísticas, y la liga debe mantener un registro explícito de los jugadores inscritos que van a disputar sus torneos.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Gestión de Tienda y Creación de Torneos por el Dueño (Priority: P1)
@@ -78,15 +84,17 @@ Como **Dueño de tienda o Jugador**, quiero que el sistema almacene la informaci
   2. **Restricción de precio máximo del mazo** (presupuesto tope permitido para la suma de cartas del mazo inscrito).
 - **FR-007 (Inscripción de Usuarios y Snapshot del Mazo)**: Al apuntarse un usuario a un torneo con uno de sus mazos de Moxfield, el sistema DEBE validar que el mazo cumple las restricciones de formato y presupuesto del torneo, registrar la inscripción en la lista de usuarios apuntados y guardar una instantánea inmutable de la composición y coste del mazo en ese momento.
 - **FR-008 (Catálogo e Información de Cartas de Scryfall)**: El sistema DEBE almacenar la información aportada por **Scryfall** para las cartas utilizadas en los mazos, incluyendo como mínimo: identificador de Scryfall/Oracle, nombre de la carta, coste de maná y valor de maná (CMC), colores e identidad de color, línea de tipo (criatura, instantáneo, tierra, comandante, etc.), rareza, legalidades por formato (*Standard*, *Commander*, etc.) y precios de mercado.
-- **FR-009 (Explotación Estadística con Datos de Scryfall)**: El sistema DEBE permitir agregar y consultar estadísticas por torneo y por tienda a partir de los datos de Scryfall y las inscripciones registradas (cartas más jugadas, distribución de colores, curva de maná promedio, tipos de carta predominantes y coste medio de los mazos).
+- **FR-009 (Explotación Estadística con Datos de Scryfall)**: El sistema DEBE permitir agregar y consultar estadísticas por torneo, por liga y por tienda a partir de los datos de Scryfall y las inscripciones registradas (cartas más jugadas, distribución de colores, curva de maná promedio, tipos de carta predominantes y coste medio de los mazos).
+- **FR-010 (Estructura y Puntuación de Liga)**: El sistema DEBE almacenar para cada **Liga**: la tienda organizadora, el nombre y periodo/estado de la liga, la **lista de torneos** que puntúan para dicha liga y la **lista de jugadores participantes con sus puntos acumulados** (donde los puntos de cada jugador en la liga vienen determinados por los puntos obtenidos en los torneos asociados a la liga).
 
 ### Key Entities *(include if feature involves data)*
 
-- **Tienda (Store)**: Representa el establecimiento o comunidad organizadora. Se relaciona con un único **Propietario** (Usuario con rol de dueño), una colección de **Usuarios** miembros y una colección de **Torneos**.
-- **Usuario (User)**: Representa a una persona registrada en la plataforma. Contiene nombre de usuario, credencial de contraseña protegida, nivel de privilegio (Jugador o Dueño), pertenencia a tiendas y su lista de **Mazos**.
+- **Tienda (Store)**: Representa el establecimiento o comunidad organizadora. Se relaciona con un único **Propietario** (Usuario con rol de dueño), una colección de **Usuarios** miembros, una colección de **Ligas** y una colección de **Torneos**.
+- **Liga (League)**: Competición continuada organizada por una **Tienda** compuesta por una **lista de Torneos** puntuables y una **lista de Jugadores con sus puntos acumulados**, calculados a partir de su rendimiento en los torneos de la liga.
+- **Usuario (User)**: Representa a una persona registrada en la plataforma. Contiene nombre de usuario, credencial de contraseña protegida, nivel de privilegio (Jugador o Dueño), pertenencia a tiendas, participación/puntos en ligas y su lista de **Mazos**.
 - **Mazo (Deck)**: Representa un mazo perteneciente a un usuario, definido por su enlace directo a **Moxfield** (URL e identificador del mazo) y metadatos básicos derivados al sincronizarse.
-- **Torneo (Tournament)**: Evento competitivo perteneciente a una **Tienda**. Incluye día y hora programados, precio de inscripción, premio, estado del torneo, **Restricciones** (formato como *Standard* o *Commander* y presupuesto máximo del mazo) y la lista de **Inscripciones** (usuarios apuntados).
-- **Inscripción a Torneo (Tournament Registration)**: Vínculo único entre un **Usuario** y un **Torneo**, que referencia el **Mazo** utilizado y preserva la instantánea inmutable (snapshot) de las cartas y su valoración económica en el momento de apuntarse.
+- **Torneo (Tournament)**: Evento competitivo perteneciente a una **Tienda** y opcionalmente vinculado a una **Liga**. Incluye día y hora programados, precio de inscripción, aforo máximo, premio, estado del torneo, **Restricciones** (formato como *Standard* o *Commander* y presupuesto máximo del mazo) y la lista de **Inscripciones** (usuarios apuntados con sus puntos del torneo).
+- **Inscripción a Torneo (Tournament Registration)**: Vínculo único entre un **Usuario** y un **Torneo**, que referencia el **Mazo** utilizado, registra los puntos obtenidos por el jugador en el torneo (que alimentan la **Liga**) y preserva la instantánea inmutable (snapshot) de las cartas y su valoración económica en el momento de apuntarse.
 - **Carta Scryfall (Scryfall Card Metadata)**: Entidad de referencia que conserva los atributos oficiales de Scryfall (nombre, coste/valor de maná, colores, identidad de color, tipos, rareza, legalidad en *Standard*/*Commander* y precio) necesarios para validar restricciones y calcular estadísticas.
 
 ## Success Criteria *(mandatory)*

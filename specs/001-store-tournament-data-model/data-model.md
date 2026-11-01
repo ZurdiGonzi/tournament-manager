@@ -14,6 +14,10 @@ erDiagram
     USERS ||--o{ STORE_MEMBERS : "pertenece a"
     STORES ||--o{ STORE_MEMBERS : "tiene usuarios"
     USERS ||--o{ DECKS : "posee lista de mazos"
+    STORES ||--o{ LEAGUES : "organiza ligas"
+    LEAGUES ||--o{ LEAGUE_STANDINGS : "tiene lista de jugadores y puntos"
+    USERS ||--o{ LEAGUE_STANDINGS : "acumula puntos en liga"
+    LEAGUES ||--o{ TOURNAMENTS : "consta de lista de torneos puntuables"
     STORES ||--o{ TOURNAMENT_TEMPLATES : "configura recurrentes"
     STORES ||--o{ TOURNAMENTS : "organiza lista de torneos"
     TOURNAMENT_TEMPLATES |o--o{ TOURNAMENTS : "genera (@Scheduled)"
@@ -27,7 +31,7 @@ erDiagram
 
     USERS {
         uuid id PK
-         varchar username UK
+        varchar username UK
         varchar password_hash
         varchar role "PLAYER | ADMIN"
         timestamptz created_at
@@ -47,6 +51,27 @@ erDiagram
         timestamptz joined_at
     }
 
+    LEAGUES {
+        uuid id PK
+        uuid store_id FK
+        varchar name
+        varchar format "STANDARD | COMMANDER"
+        text prize_description
+        timestamptz start_date
+        timestamptz end_date
+        varchar status "OPEN | IN_PROGRESS | COMPLETED | CANCELLED"
+    }
+
+    LEAGUE_STANDINGS {
+        uuid league_id PK, FK
+        uuid user_id PK, FK
+        int total_points "Puntos orientados por los torneos"
+        int tournaments_played
+        int matches_won
+        int matches_drawn
+        int matches_lost
+    }
+
     DECKS {
         uuid id PK
         uuid user_id FK
@@ -60,6 +85,7 @@ erDiagram
     TOURNAMENTS {
         uuid id PK
         uuid store_id FK
+        uuid league_id FK "Nullable (Liga a la que puntúa)"
         uuid template_id FK "Nullable (para @Scheduled)"
         varchar name
         timestamptz scheduled_at "Día y hora"
@@ -67,6 +93,7 @@ erDiagram
         text prize_description "Premio"
         varchar format "STANDARD | COMMANDER"
         numeric max_deck_budget "Restricción de precio del mazo"
+        int max_players "Aforo máximo"
         varchar status "DRAFT | REGISTRATION_OPEN | IN_PROGRESS | COMPLETED | CANCELLED"
         int current_round
         int max_rounds
@@ -80,6 +107,9 @@ erDiagram
         uuid deck_id FK
         varchar status "REGISTERED | CHECKED_IN | DROPPED | DISQUALIFIED"
         numeric calculated_deck_price "Coste validado del mazo"
+        int match_points "Puntos obtenidos en este torneo"
+        numeric omw_percentage
+        int final_rank
         jsonb deck_snapshot "Snapshot inmutable del mazo"
         timestamptz registered_at
     }
@@ -149,6 +179,24 @@ El mazo perteneciente a la lista de mazos de un usuario consiste esencialmente e
 | `moxfield_url` | `VARCHAR(500)` | `NOT NULL` | Enlace completo al mazo en Moxfield (`https://www.moxfield.com/decks/...`). |
 | `moxfield_deck_id` | `VARCHAR(64)` | `NOT NULL` | ID público extraído del enlace de Moxfield para consumo vía `MoxfieldClient`. |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` | Fecha de registro del enlace. |
+
+### 2.3.1. `leagues` (Liga) y `league_standings` (Jugadores y Puntos de la Liga)
+Una **Liga** agrupa una **lista de torneos** (`tournaments.league_id`) que orientan y otorgan puntos a una **lista de jugadores** (`league_standings`).
+
+| Tabla | Columna | Tipo PostgreSQL | Restricciones | Descripción |
+| :--- | :--- | :--- | :--- | :--- |
+| `leagues` | `id` | `UUID` | `PRIMARY KEY DEFAULT gen_random_uuid()` | Identificador de la liga. |
+| `leagues` | `store_id` | `UUID` | `NOT NULL REFERENCES stores(id) ON DELETE CASCADE` | Tienda organizadora de la liga. |
+| `leagues` | `name` | `VARCHAR(150)` | `NOT NULL` | Nombre de la liga (ej. *Liga Trimestral Commander*). |
+| `leagues` | `format` | `VARCHAR(30)` | `NOT NULL CHECK (format IN ('STANDARD', 'COMMANDER'))` | Formato oficial de los torneos de la liga. |
+| `leagues` | `prize_description` | `TEXT` | `NULL` | Premio final acumulado de la liga. |
+| `leagues` | `start_date` / `end_date` | `TIMESTAMPTZ` | `start_date NOT NULL` | Fechas de inicio y fin de la temporada de liga. |
+| `leagues` | `status` | `VARCHAR(30)` | `NOT NULL` | `OPEN`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED`. |
+| `league_standings` | `league_id` | `UUID` | `NOT NULL REFERENCES leagues(id) ON DELETE CASCADE` | Liga en la que compite el jugador. |
+| `league_standings` | `user_id` | `UUID` | `NOT NULL REFERENCES users(id) ON DELETE CASCADE` | Jugador participante (`PRIMARY KEY (league_id, user_id)`). |
+| `league_standings` | `total_points` | `INT` | `NOT NULL DEFAULT 0` | Puntos totales acumulados a partir de los torneos de la liga. |
+| `league_standings` | `tournaments_played` | `INT` | `NOT NULL DEFAULT 0` | Cantidad de torneos de la liga disputados por el jugador. |
+| `league_standings` | `matches_won` / `drawn` / `lost` | `INT` | `NOT NULL DEFAULT 0` | Récord global de partidas dentro de los torneos de la liga. |
 
 ### 2.4. `tournaments` (Torneo) y `tournament_templates` (Plantillas `@Scheduled`)
 Almacena los torneos de una tienda con su día y hora, precio de entrada, premio y restricciones (formato *Standard* o *Commander* y tope de precio del mazo).
