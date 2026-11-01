@@ -33,8 +33,11 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+application-local.yml
+application-local.properties
+*local.yml
+*local.properties
 
 # Node / Frontend
 node_modules/
 dist/
-
