@@ -42,26 +42,56 @@ CREATE TABLE decks (
     UNIQUE (user_id, moxfield_deck_id)
 );
 
--- 5. TOURNAMENT_TEMPLATES (Plantillas para creación periódica con @Scheduled)
+-- 5. LEAGUES (Liga: pertenece a una Tienda, agrupa una lista de Torneos y una lista de Jugadores con sus puntos)
+CREATE TABLE leagues (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+    name VARCHAR(150) NOT NULL,
+    format VARCHAR(30) NOT NULL CHECK (format IN ('STANDARD', 'COMMANDER')),
+    prize_description TEXT,
+    start_date TIMESTAMPTZ NOT NULL,
+    end_date TIMESTAMPTZ,
+    status VARCHAR(30) NOT NULL DEFAULT 'IN_PROGRESS'
+        CHECK (status IN ('OPEN', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 6. LEAGUE_STANDINGS (Lista de jugadores apuntados en una Liga con sus puntos acumulados por los torneos)
+CREATE TABLE league_standings (
+    league_id UUID NOT NULL REFERENCES leagues(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    total_points INT NOT NULL DEFAULT 0 CHECK (total_points >= 0),
+    tournaments_played INT NOT NULL DEFAULT 0 CHECK (tournaments_played >= 0),
+    matches_won INT NOT NULL DEFAULT 0 CHECK (matches_won >= 0),
+    matches_drawn INT NOT NULL DEFAULT 0 CHECK (matches_drawn >= 0),
+    matches_lost INT NOT NULL DEFAULT 0 CHECK (matches_lost >= 0),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (league_id, user_id)
+);
+
+-- 7. TOURNAMENT_TEMPLATES (Plantillas para creación periódica con @Scheduled)
 CREATE TABLE tournament_templates (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+    league_id UUID REFERENCES leagues(id) ON DELETE SET NULL,
     name VARCHAR(150) NOT NULL,
     cron_expression VARCHAR(60) NOT NULL,
     entry_fee NUMERIC(10, 2) NOT NULL DEFAULT 0.00 CHECK (entry_fee >= 0),
     prize_description TEXT NOT NULL,
     format VARCHAR(30) NOT NULL CHECK (format IN ('STANDARD', 'COMMANDER')),
     max_deck_budget NUMERIC(10, 2) NOT NULL CHECK (max_deck_budget > 0),
+    max_players INT NOT NULL DEFAULT 32 CHECK (max_players >= 2),
     max_rounds INT NOT NULL DEFAULT 3 CHECK (max_rounds > 0),
     active BOOLEAN NOT NULL DEFAULT true,
     last_generated_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- 6. TOURNAMENTS (Torneo: día/hora, precio, restricciones formato/presupuesto, premio)
+-- 8. TOURNAMENTS (Torneo: día/hora, precio, restricciones formato/presupuesto, premio y vínculo a Liga)
 CREATE TABLE tournaments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     store_id UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+    league_id UUID REFERENCES leagues(id) ON DELETE SET NULL,
     template_id UUID REFERENCES tournament_templates(id) ON DELETE SET NULL,
     name VARCHAR(150) NOT NULL,
     scheduled_at TIMESTAMPTZ NOT NULL,
@@ -69,6 +99,7 @@ CREATE TABLE tournaments (
     prize_description TEXT NOT NULL,
     format VARCHAR(30) NOT NULL CHECK (format IN ('STANDARD', 'COMMANDER')),
     max_deck_budget NUMERIC(10, 2) NOT NULL CHECK (max_deck_budget > 0),
+    max_players INT NOT NULL DEFAULT 32 CHECK (max_players >= 2),
     status VARCHAR(30) NOT NULL DEFAULT 'REGISTRATION_OPEN'
         CHECK (status IN ('DRAFT', 'REGISTRATION_OPEN', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED')),
     current_round INT NOT NULL DEFAULT 0,
@@ -77,7 +108,7 @@ CREATE TABLE tournaments (
     CONSTRAINT uq_tournament_template_schedule UNIQUE (template_id, scheduled_at)
 );
 
--- 7. SCRYFALL_CARDS (Información de Scryfall sobre las cartas para validación y estadísticas)
+-- 9. SCRYFALL_CARDS (Información de Scryfall sobre las cartas para validación y estadísticas)
 CREATE TABLE scryfall_cards (
     id UUID PRIMARY KEY,
     oracle_id UUID NOT NULL,
@@ -95,7 +126,7 @@ CREATE TABLE scryfall_cards (
     last_synced_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- 8. TOURNAMENT_REGISTRATIONS (Lista de usuarios apuntados al Torneo + Snapshot JSONB)
+-- 10. TOURNAMENT_REGISTRATIONS (Lista de usuarios apuntados al Torneo + Puntos + Snapshot JSONB)
 CREATE TABLE tournament_registrations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tournament_id UUID NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
@@ -104,12 +135,15 @@ CREATE TABLE tournament_registrations (
     status VARCHAR(25) NOT NULL DEFAULT 'REGISTERED'
         CHECK (status IN ('REGISTERED', 'CHECKED_IN', 'DROPPED', 'DISQUALIFIED')),
     calculated_deck_price NUMERIC(10, 2) NOT NULL CHECK (calculated_deck_price >= 0),
+    match_points INT NOT NULL DEFAULT 0 CHECK (match_points >= 0),
+    omw_percentage NUMERIC(5, 4) NOT NULL DEFAULT 0.0000,
+    final_rank INT CHECK (final_rank IS NULL OR final_rank > 0),
     deck_snapshot JSONB NOT NULL,
     registered_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (tournament_id, user_id)
 );
 
--- 9. REGISTRATION_DECK_CARDS (Tabla analítica para cruzar inscripciones con Scryfall)
+-- 11. REGISTRATION_DECK_CARDS (Tabla analítica para cruzar inscripciones con Scryfall)
 CREATE TABLE registration_deck_cards (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     registration_id UUID NOT NULL REFERENCES tournament_registrations(id) ON DELETE CASCADE,
@@ -119,7 +153,7 @@ CREATE TABLE registration_deck_cards (
     unit_price_snapshot NUMERIC(10, 2) NOT NULL CHECK (unit_price_snapshot >= 0)
 );
 
--- 10. ROUNDS & MATCHES (Soporte relacional para rondas y emparejamientos del torneo)
+-- 12. ROUNDS & MATCHES (Soporte relacional para rondas y emparejamientos del torneo)
 CREATE TABLE rounds (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tournament_id UUID NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
@@ -145,15 +179,69 @@ CREATE TABLE matches (
 );
 
 -- =============================================================================
+-- VISTAS SQL (ESTADÍSTICAS DE SCRYFALL Y CLASIFICACIÓN DE LIGAS POR TORNEOS)
+-- =============================================================================
+
+-- Vista 1: Clasificación de Liga calculada desde los puntos de sus Torneos asociados
+CREATE OR REPLACE VIEW v_league_leaderboard AS
+SELECT
+    l.id AS league_id,
+    l.store_id,
+    l.name AS league_name,
+    u.id AS user_id,
+    u.username,
+    COALESCE(ls.total_points, SUM(tr.match_points), 0) AS total_points,
+    COUNT(DISTINCT tr.tournament_id) AS tournaments_played,
+    RANK() OVER (
+        PARTITION BY l.id
+        ORDER BY COALESCE(ls.total_points, SUM(tr.match_points), 0) DESC,
+                 COUNT(DISTINCT tr.tournament_id) DESC
+    ) AS current_rank
+FROM leagues l
+JOIN league_standings ls ON ls.league_id = l.id
+JOIN users u ON u.id = ls.user_id
+LEFT JOIN tournaments t ON t.league_id = l.id
+LEFT JOIN tournament_registrations tr ON tr.tournament_id = t.id AND tr.user_id = u.id
+GROUP BY l.id, l.store_id, l.name, u.id, u.username, ls.total_points;
+
+-- Vista 2: Estadísticas de Cartas de Scryfall por Tienda y Formato
+CREATE OR REPLACE VIEW v_scryfall_card_stats AS
+SELECT
+    t.store_id,
+    t.league_id,
+    t.format,
+    sc.oracle_id,
+    sc.name AS card_name,
+    sc.type_line,
+    sc.mana_cost,
+    sc.cmc,
+    sc.colors,
+    sc.color_identity,
+    sc.rarity,
+    COUNT(DISTINCT tr.id) AS decks_including_card,
+    SUM(rdc.quantity) AS total_copies_played,
+    ROUND(AVG(rdc.unit_price_snapshot), 2) AS avg_unit_price
+FROM registration_deck_cards rdc
+JOIN tournament_registrations tr ON tr.id = rdc.registration_id
+JOIN tournaments t ON t.id = tr.tournament_id
+JOIN scryfall_cards sc ON sc.id = rdc.scryfall_card_id
+GROUP BY
+    t.store_id, t.league_id, t.format,
+    sc.oracle_id, sc.name, sc.type_line, sc.mana_cost, sc.cmc, sc.colors, sc.color_identity, sc.rarity;
+
+-- =============================================================================
 -- ÍNDICES RELACIONALES Y GIN (JSONB / ARRAYS) PARA ESTADÍSTICAS Y RENDIMIENTO
 -- =============================================================================
+CREATE INDEX idx_leagues_store ON leagues(store_id);
+CREATE INDEX idx_league_standings_points ON league_standings(league_id, total_points DESC);
 CREATE INDEX idx_tournaments_store_date ON tournaments(store_id, scheduled_at DESC);
+CREATE INDEX idx_tournaments_league ON tournaments(league_id);
 CREATE INDEX idx_decks_user_id ON decks(user_id);
 CREATE INDEX idx_registrations_tournament ON tournament_registrations(tournament_id);
+CREATE INDEX idx_registrations_points ON tournament_registrations(tournament_id, match_points DESC);
 CREATE INDEX idx_registrations_deck_snapshot_gin ON tournament_registrations USING GIN (deck_snapshot);
 CREATE INDEX idx_scryfall_oracle_id ON scryfall_cards(oracle_id);
 CREATE INDEX idx_scryfall_legalities_gin ON scryfall_cards USING GIN (legalities);
 CREATE INDEX idx_scryfall_colors_gin ON scryfall_cards USING GIN (colors);
 CREATE INDEX idx_reg_deck_cards_card ON registration_deck_cards(scryfall_card_id);
 CREATE INDEX idx_reg_deck_cards_registration ON registration_deck_cards(registration_id);
-
